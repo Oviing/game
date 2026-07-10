@@ -1,0 +1,6 @@
+# Runtime dependency
+pygame>=2.5
+
+# Only needed if you want to regenerate the art in assets/ from
+# tools/generate_assets.py (the generated PNGs are already committed):
+# pillow>=10.0
