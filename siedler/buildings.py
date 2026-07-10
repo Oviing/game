@@ -43,6 +43,9 @@ class Building:
         self.produce_timer = 0
 
         self.worker = None             # gather worker (Unit)
+        self.recruit_queue = []        # barracks: queued troop names
+        self.recruiting = None         # troop currently being built
+        self.recruit_timer = 0
         self.attack_cd = 0.0
         self._access = None
         self.flash = 0                 # damage flash frames
@@ -103,7 +106,7 @@ class Building:
             return
         if self.kind == "produce":
             self._update_produce(game)
-        elif self.kind == "military" and self.d.get("trains"):
+        elif self.kind == "military" and self.d.get("recruits"):
             self._update_barracks(game)
         elif self.kind == "military" and "attack_dps" in self.d:
             self._update_tower(game)
@@ -124,19 +127,18 @@ class Building:
                 self.out_buffer += 1
 
     def _update_barracks(self, game):
-        if self.producing:
-            self.produce_timer -= 1
-            if self.produce_timer <= 0:
-                self.producing = False
-                game.spawn_soldier(self)
+        # resources were already spent when the recruit was queued
+        if self.recruiting is not None:
+            self.recruit_timer -= 1
+            if self.recruit_timer <= 0:
+                troop = self.recruiting
+                self.recruiting = None
+                game.spawn_soldier(self, troop)
             return
-        if game.soldier_count() >= C.MAX_SETTLERS:
-            return
-        if all(self.in_buffer[r] >= n for r, n in self.inputs.items()):
-            for r, n in self.inputs.items():
-                self.in_buffer[r] -= n
-            self.producing = True
-            self.produce_timer = self.work_ticks
+        if self.recruit_queue:
+            troop = self.recruit_queue.pop(0)
+            self.recruiting = troop
+            self.recruit_timer = C.TROOPS[troop]["recruit_ticks"]
 
     def _update_tower(self, game):
         if self.attack_cd > 0:

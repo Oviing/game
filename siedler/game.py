@@ -81,7 +81,7 @@ class Game:
         self._place_enemy_camp()
 
         self.hud = HUD(self)
-        self.notify("Build woodcutters and sawmills to make planks.")
+        self.notify("Build Mining Rigs and Smelters to make alloy.")
 
     def _place_enemy_camp(self):
         cx, cy = C.MAP_W // 2, C.MAP_H // 2
@@ -122,14 +122,29 @@ class Game:
         self.units.append(u)
         return u
 
-    def spawn_soldier(self, barracks):
+    def spawn_soldier(self, barracks, troop="marine"):
         ax, ay = barracks.access_tile(self.world)
         u = Unit(self, ax, ay, "soldier", team="player")
-        u.max_hp = C.SOLDIER_HP
-        u.hp = C.SOLDIER_HP
+        u.apply_troop(troop)
         self.player_soldiers.append(u)
-        self.notify("A soldier has been trained!")
+        self.notify("%s ready for duty!" % C.TROOPS[troop]["label"])
         return u
+
+    def queue_recruit(self, barracks, troop):
+        """Spend resources now and queue a troop at the barracks."""
+        if not barracks.complete or not barracks.d.get("recruits"):
+            return False
+        if self.soldier_count() + len(barracks.recruit_queue) >= C.MAX_SETTLERS:
+            self.notify("Troop capacity reached.")
+            return False
+        cost = C.TROOPS[troop]["cost"]
+        if not self.economy.can_afford(cost):
+            self.notify("Not enough resources for %s."
+                        % C.TROOPS[troop]["label"])
+            return False
+        self.economy.spend(cost)
+        barracks.recruit_queue.append(troop)
+        return True
 
     def soldier_count(self):
         return len(self.player_soldiers)
@@ -277,6 +292,14 @@ class Game:
             self._right_click(pos)
 
     def _hud_click(self, pos):
+        # recruit buttons take priority when a barracks is selected
+        if self.selection and self.selection[0] == "building":
+            b = self.selection[1]
+            if b.owner == "player" and b.complete and b.d.get("recruits"):
+                troop = self.hud.recruit_button_at(pos)
+                if troop:
+                    self.queue_recruit(b, troop)
+                    return
         bt = self.hud.button_at(pos)
         if bt:
             self.build_type = None if self.build_type == bt else bt
@@ -455,6 +478,10 @@ class Game:
             b.occupy(self.world, blocked=False)
             if b.worker:
                 b.worker.home = None
+            for troop in list(b.recruit_queue) + \
+                    ([b.recruiting] if b.recruiting else []):
+                for r, n in C.TROOPS.get(troop, {}).get("cost", {}).items():
+                    self.economy.add(r, n)
         self.buildings = [b for b in self.buildings if not b.dead]
         self.player_soldiers = [u for u in self.player_soldiers if not u.dead]
         self.enemy_units = [u for u in self.enemy_units if not u.dead]
@@ -579,10 +606,11 @@ class Game:
 
     def _draw_unit(self, u):
         cam = self.camera
-        name = {"carrier": "settler", "builder": "builder",
-                "worker": "worker", "soldier": "soldier"}[u.role]
-        if u.role == "soldier" and u.team == "enemy":
-            name = "enemy_soldier"
+        if u.role == "soldier":
+            name = u.sprite or "marine"
+        else:
+            name = {"carrier": "colonist", "builder": "builder",
+                    "worker": "worker"}[u.role]
         img = assets.unit_img(name)
         if u.facing < 0:
             img = pygame.transform.flip(img, True, False)

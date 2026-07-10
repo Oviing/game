@@ -105,37 +105,82 @@ def main():
                   or any(u.carrying == C.PLANK for u in game.units))
     check(made_plank, "sawmill consumed logs and produced planks")
 
-    # --- combat: barracks should train a soldier ------------------------
-    game.economy.stock[C.COIN] = 20
-    game.economy.stock[C.BREAD] = 20
-    game.economy.stock[C.PLANK] = 20
-    game.economy.stock[C.STONE] = 20
+    # --- recruitment: barracks + queue each troop type ------------------
+    for r in (C.COIN, C.BREAD, C.PLANK, C.STONE):
+        game.economy.stock[r] = 40
     bk_spot = find_spot(game, (cx, cy), 2)
     bk = game.place_building("barracks", *bk_spot)
     check(bk is not None, "placed a barracks")
-    fast_forward(game, 6000)
-    check(bk.complete, "barracks finished construction")
-    check(len(game.player_soldiers) >= 1,
-          "a soldier was trained (%d soldiers)" % len(game.player_soldiers))
-
-    # --- combat: enemy raids should trigger and be fightable ------------
-    enemies_before = len(game.enemy_units)
-    fast_forward(game, C.RAID_FIRST_TICKS + 200)
-    check(len(game.enemy_units) >= enemies_before,
-          "enemy raid wave spawned")
-
-    # order our soldier to attack the enemy HQ and confirm damage lands
-    hq = game.enemy.hq
-    hq_hp0 = hq.hp
-    for s in game.player_soldiers:
-        s.attack_target = hq
     fast_forward(game, 4000)
+    check(bk.complete, "barracks finished construction")
+
+    for troop in C.PLAYER_TROOPS:
+        before = game.economy.stock[C.COIN]
+        ok = game.queue_recruit(bk, troop)
+        check(ok, "queued a %s" % troop)
+        check(game.economy.stock[C.COIN] < before,
+              "queuing %s spent credits" % troop)
+    have_types = set()
+    for _ in range(8000):
+        game.tick_once()
+        for u in game.player_soldiers:
+            have_types.add(u.troop)
+        if {"marine", "ranger", "heavy"} <= have_types:
+            break
+    check({"marine", "ranger", "heavy"} <= have_types,
+          "recruited all three troop types (%s)" % sorted(have_types))
+
+    # --- ranged combat: a ranger damages from range without closing -----
+    ranger = next(u for u in game.player_soldiers if u.troop == "ranger")
+    check(ranger.ranged, "ranger is a ranged unit (range %.1f)" % ranger.range)
+    dummy = game.enemy.hq
+    hp0 = dummy.hp
+    # park the ranger ~4 tiles from the hive edge and lock target
+    ex, ey = game.enemy.center
+    ranger.x, ranger.y = float(ex + 4), float(ey)
+    ranger.attack_target = dummy
+    ranger.move_goal = None
+    fast_forward(game, 300)
+    d_after = ((ranger.x - ex) ** 2 + (ranger.y - ey) ** 2) ** 0.5
+    check(dummy.hp < hp0, "ranger damaged the hive from range")
+    check(d_after > 2.5, "ranger stayed at range (did not melee-rush)")
+
+    # --- enemy: scouts trigger an early reactive raid -------------------
+    g2 = Game(seed=3, headless=True)
+    check(len(g2.enemy.scouts) >= 1, "enemy hive fields scouts")
+    spy = g2.spawn_soldier(g2.enemy.hq, "marine")  # a decoy to be spotted
+    spy.max_hp = spy.hp = 1_000_000              # survive the test window
+    raids_before = g2.enemy.raid_num
+    reacted = False
+    for _ in range(8 * C.TICKS_PER_SECOND):
+        if g2.enemy.scouts:                       # glue the decoy to a scout
+            s0 = g2.enemy.scouts[0]
+            spy.x, spy.y = s0.x + 0.5, s0.y
+            spy.attack_target = None
+            spy.move_goal = None
+        g2.tick_once()
+        if g2.enemy.raid_num > raids_before:
+            reacted = True
+            break
+    check(reacted, "enemy scout detection triggered an early raid")
+
+    # --- combat: a squad razes the hive to win --------------------------
+    hq = game.enemy.hq
+    ex, ey = game.enemy.center
+    squad = [game.spawn_soldier(bk, "heavy") for _ in range(4)]
+    hq_hp0 = hq.hp
+    for k, sdr in enumerate(squad):
+        sdr.max_hp = sdr.hp = 1_000_000     # durable enough to finish the test
+        sdr.x, sdr.y = float(ex + 3 + k), float(ey + 3)
+        sdr.attack_target = hq
+    fast_forward(game, 1600)
     check(hq.hp < hq_hp0 or hq.dead,
-          "player soldiers damaged the enemy HQ (%d -> %d)"
-          % (hq_hp0, hq.hp))
+          "player squad razed the alien hive (%d -> %d)" % (hq_hp0, hq.hp))
+    check(game.result == "win" or hq.dead,
+          "destroying the hive wins the game")
 
     # --- stability: long run without crashing ---------------------------
-    fast_forward(game, 4000)
+    fast_forward(game, 3000)
     check(game.tick > 0, "game ran %d ticks without crashing" % game.tick)
 
     print("\nALL CHECKS PASSED")

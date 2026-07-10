@@ -34,8 +34,16 @@ class Unit:
         self.move_goal = None      # soldier explicit move order (tile)
         self.attack_target = None  # soldier's current foe (Unit or Building)
         self.leash_center = None   # guards stay within a leash of this tile
+        self.leash_radius = C.ENEMY_GUARD_LEASH
         self.max_hp = 1
         self.hp = 1
+        # combat stats (set from constants.TROOPS for soldiers)
+        self.troop = None
+        self.sprite = None
+        self.dps = C.TROOPS["marine"]["dps"]
+        self.speed = C.TROOPS["marine"]["speed"]
+        self.range = C.MELEE_RANGE
+        self.shoot_cd = 0.0
         self._repath_cd = 0.0
         self.facing = 1
         self.id = Unit._next_id
@@ -52,6 +60,21 @@ class Unit:
 
     def take_damage(self, amount):
         self.hp -= amount
+
+    def apply_troop(self, troop_name):
+        d = C.TROOPS[troop_name]
+        self.troop = troop_name
+        self.sprite = d["sprite"]
+        self.team = d["team"]
+        self.max_hp = d["hp"]
+        self.hp = d["hp"]
+        self.dps = d["dps"]
+        self.speed = d["speed"]
+        self.range = d["range"]
+
+    @property
+    def ranged(self):
+        return self.range > C.MELEE_RANGE + 0.5
 
     def set_dest(self, goal, goal_walkable=True):
         start = self.tile
@@ -235,19 +258,20 @@ class Unit:
 
     # -------------------------------------------------- soldier
     def _update_soldier(self, dt):
-        speed = C.SOLDIER_SPEED
-        world = self.game.world
+        speed = self.speed
         self._repath_cd -= dt
+        if self.shoot_cd > 0:
+            self.shoot_cd -= dt
 
         tgt = self.attack_target
         if tgt is not None and _is_dead(tgt):
             self.attack_target = None
             tgt = None
 
-        # guards abandon a chase that pulls them too far from their post
+        # guards/scouts abandon a chase that pulls them too far from their post
         if self.leash_center is not None:
             lx, ly = self.leash_center
-            if math.hypot(self.x - lx, self.y - ly) > C.ENEMY_GUARD_LEASH:
+            if math.hypot(self.x - lx, self.y - ly) > self.leash_radius:
                 self.attack_target = None
                 tgt = None
                 self.move_goal = self.leash_center
@@ -260,15 +284,18 @@ class Unit:
         if tgt is not None:
             tx, ty = _target_tile(tgt)
             d = math.hypot(self.x - tx, self.y - ty)
-            reach = C.MELEE_RANGE + _target_radius(tgt)
+            reach = self.range + _target_radius(tgt)
             if d <= reach:
                 self.path = []
-                dps = (C.SOLDIER_DPS if self.team == "player"
-                       else C.ENEMY_SOLDIER_DPS)
-                tgt.take_damage(dps * dt)
+                tgt.take_damage(self.dps * dt)
                 self.facing = 1 if tx >= self.x else -1
+                if self.ranged and self.shoot_cd <= 0:
+                    self.game.add_shot(((self.x + 0.5) * C.TILE,
+                                        (self.y + 0.5) * C.TILE),
+                                       (tx * C.TILE, ty * C.TILE), self.team)
+                    self.shoot_cd = 0.35
                 return
-            # chase
+            # close the distance
             if not self.path or self._repath_cd <= 0:
                 self.set_dest((int(round(tx)), int(round(ty))),
                               goal_walkable=False)
@@ -290,7 +317,7 @@ class Unit:
         def in_leash(px, py):
             if lc is None:
                 return True
-            return math.hypot(px - lc[0], py - lc[1]) <= C.ENEMY_GUARD_LEASH
+            return math.hypot(px - lc[0], py - lc[1]) <= self.leash_radius
 
         if self.team == "player":
             foes = game.enemy_units
