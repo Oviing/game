@@ -74,11 +74,17 @@ def load():
         _load_one("b_" + key, rel)
 
     unit_files = {
-        "settler": "units/settler.png",
+        "colonist": "units/colonist.png",
         "builder": "units/builder.png",
         "worker": "units/worker.png",
-        "soldier": "units/soldier.png",
-        "enemy_soldier": "units/enemy_soldier.png",
+        # player troops
+        "marine": "units/marine.png",
+        "ranger": "units/ranger.png",
+        "heavy": "units/heavy.png",
+        # enemy troops
+        "alien": "units/alien.png",
+        "spitter": "units/spitter.png",
+        "scout": "units/scout.png",
     }
     for key, rel in unit_files.items():
         _load_one("u_" + key, rel)
@@ -110,7 +116,7 @@ def building_img(kind):
 
 
 def unit_img(name):
-    return images.get("u_" + name, images.get("u_settler"))
+    return images.get("u_" + name, images.get("u_colonist"))
 
 
 def icon(name):

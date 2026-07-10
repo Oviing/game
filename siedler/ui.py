@@ -61,6 +61,22 @@ class HUD:
         fy = (pos[1] - self.mm_rect.y) / self.mm_rect.h
         return int(fx * C.MAP_W), int(fy * C.MAP_H)
 
+    def _recruit_rects(self):
+        rects = []
+        x0 = 300
+        y0 = self.panel_rect.top + 34
+        bw, bh = 150, 46
+        for i, troop in enumerate(C.PLAYER_TROOPS):
+            r = pygame.Rect(x0 + (i % 3) * (bw + 8), y0, bw, bh)
+            rects.append((r, troop))
+        return rects
+
+    def recruit_button_at(self, pos):
+        for r, troop in self._recruit_rects():
+            if r.collidepoint(pos):
+                return troop
+        return None
+
     # -------------------------------------------------- drawing
     def draw(self, surf):
         self._draw_resource_bar(surf)
@@ -148,12 +164,14 @@ class HUD:
         cost = d.get("cost", {})
         if cost:
             lines.append("Cost: " + ", ".join(
-                "%d %s" % (n, r) for r, n in cost.items()))
+                "%d %s" % (n, C.RESOURCE_LABEL.get(r, r))
+                for r, n in cost.items()))
         if d.get("inputs"):
             lines.append("Needs: " + ", ".join(
-                "%s" % r for r in d["inputs"]))
+                C.RESOURCE_LABEL.get(r, r) for r in d["inputs"]))
         if d.get("output"):
-            lines.append("Makes: " + d["output"])
+            lines.append("Makes: " + C.RESOURCE_LABEL.get(d["output"],
+                                                          d["output"]))
         if d.get("tip"):
             lines.append(d["tip"])
         w = max(self.small.size(ln)[0] for ln in lines) + 16
@@ -208,9 +226,62 @@ class HUD:
                           (x + 56, y - 2))
             surf.blit(self.small.render(str(b.out_buffer), True, TEXT),
                       (x + 78, y))
-        if b.d.get("trains") and b.producing:
-            surf.blit(self.small.render("Training soldier...", True, GOLDC),
-                      (x, y))
+        if b.d.get("recruits"):
+            self._draw_recruit_panel(surf, b)
+
+    def _draw_recruit_panel(self, surf, b):
+        eco = self.game.economy
+        mx, my = pygame.mouse.get_pos()
+        # queue status line
+        qy = self.panel_rect.top + 14
+        queued = len(b.recruit_queue) + (1 if b.recruiting else 0)
+        if b.recruiting:
+            frac = 1 - b.recruit_timer / max(1, C.TROOPS[b.recruiting]["recruit_ticks"])
+            surf.blit(self.small.render(
+                "Building %s  (%d queued)" % (C.TROOPS[b.recruiting]["label"],
+                                              queued),
+                True, GOLDC), (300, qy))
+            self._bar(surf, 300, qy + 18, 150, 8, frac, GOLDC)
+        else:
+            surf.blit(self.small.render("Recruit troops:", True, DIM),
+                      (300, qy))
+        for r, troop in self._recruit_rects():
+            d = C.TROOPS[troop]
+            afford = eco.can_afford(d["cost"])
+            bg = (58, 54, 48) if afford else (58, 46, 44)
+            pygame.draw.rect(surf, bg, r, border_radius=5)
+            pygame.draw.rect(surf, PANEL_EDGE, r, 2, border_radius=5)
+            img = assets.unit_img(d["sprite"])
+            th = 34
+            iw = max(1, int(img.get_width() * th / img.get_height()))
+            surf.blit(pygame.transform.smoothscale(img, (iw, th)),
+                      (r.x + 6, r.y + r.h - th - 4))
+            surf.blit(self.small.render(d["label"], True,
+                                        TEXT if afford else BAD),
+                      (r.x + 8, r.y + 4))
+            # cost icons
+            cx = r.x + iw + 14
+            for res, n in d["cost"].items():
+                ic = assets.icon(res)
+                if ic:
+                    surf.blit(pygame.transform.smoothscale(ic, (16, 16)),
+                              (cx, r.y + 8))
+                surf.blit(self.small.render(str(n), True, TEXT),
+                          (cx + 17, r.y + 8))
+                cx += 34
+            if r.collidepoint((mx, my)) and d.get("tip"):
+                self._simple_tip(surf, (mx, my), d["label"] + " — " + d["tip"])
+
+    def _simple_tip(self, surf, pos, text):
+        t = self.small.render(text, True, TEXT)
+        w, h = t.get_width() + 16, t.get_height() + 8
+        x = min(pos[0] + 12, C.SCREEN_W - w - 4)
+        y = pos[1] - h - 8
+        box = pygame.Surface((w, h), pygame.SRCALPHA)
+        box.fill((20, 18, 16, 235))
+        surf.blit(box, (x, y))
+        pygame.draw.rect(surf, PANEL_EDGE, (x, y, w, h), 1)
+        surf.blit(t, (x + 8, y + 4))
 
     def _draw_soldiers_info(self, surf, sols):
         top = self.panel_rect.top + 12
@@ -218,7 +289,7 @@ class HUD:
         surf.blit(self.mid.render("Soldiers: %d" % len(alive), True, TEXT),
                   (14, top))
         surf.blit(self.small.render(
-            "Right-click to move or attack. Destroy the red stronghold to win.",
+            "Right-click to move or attack. Destroy the alien hive to win.",
             True, DIM), (14, top + 32))
         sw = assets.icon("sword")
         if sw:
@@ -265,16 +336,18 @@ class HUD:
     def _render_mm_terrain(self, world):
         s = pygame.Surface((C.MAP_W, C.MAP_H))
         colors = {
-            C.WATER: (52, 108, 176), C.SAND: (206, 184, 128),
-            C.GRASS: (96, 152, 72), C.ROCK: (128, 124, 122),
-            C.GOLD_ROCK: (200, 168, 70),
+            C.WATER: (22, 30, 48), C.SAND: (150, 120, 92),
+            C.GRASS: (120, 84, 66), C.ROCK: (96, 92, 100),
+            C.GOLD_ROCK: (86, 200, 210),
         }
         for y in range(C.MAP_H):
             for x in range(C.MAP_W):
                 t = world.tiles[y][x]
-                c = colors.get(t.terrain, (96, 152, 72))
+                c = colors.get(t.terrain, (120, 84, 66))
                 if t.obj == C.OBJ_TREE:
-                    c = (58, 110, 52)
+                    c = (150, 150, 160)
+                elif t.obj == C.OBJ_STONE:
+                    c = (110, 104, 96)
                 s.set_at((x, y), c)
         return s
 
@@ -300,8 +373,8 @@ class HUD:
         t = self.big.render(text, True, color)
         surf.blit(t, (C.SCREEN_W // 2 - t.get_width() // 2,
                       C.SCREEN_H // 2 - 60))
-        sub = ("You razed the enemy stronghold." if win
-               else "Your castle has fallen.")
+        sub = ("You destroyed the alien hive." if win
+               else "Your command center has fallen.")
         s = self.mid.render(sub, True, TEXT)
         surf.blit(s, (C.SCREEN_W // 2 - s.get_width() // 2,
                       C.SCREEN_H // 2))
